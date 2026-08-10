@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "WSU WDS Sidecar Utilities",
   "description": "Sidecar utilities for bulk-editing WordPress block editor content.",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "permissions": [
     "activeTab",
     "sidePanel"
@@ -45,6 +45,8 @@
   "web_accessible_resources": [
     {
       "resources": [
+        "taxonomy-rules.js",
+        "taxonomy-classifier.js",
         "page-bridge.js"
       ],
       "matches": [

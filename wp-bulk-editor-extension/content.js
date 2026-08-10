@@ -3,15 +3,41 @@
   let requestId = 0;
 
   function injectBridge() {
-    if (document.documentElement.dataset.wsuWdsBridgeInjected === 'true') {
+    if (document.documentElement.dataset.wsuWdsBridgeInjected === 'true'
+      || document.documentElement.dataset.wsuWdsBridgeInjecting === 'true') {
       return;
     }
 
-    document.documentElement.dataset.wsuWdsBridgeInjected = 'true';
-    const script = document.createElement('script');
-    script.src = chrome.runtime.getURL('page-bridge.js');
-    script.onload = () => script.remove();
-    (document.head || document.documentElement).appendChild(script);
+    document.documentElement.dataset.wsuWdsBridgeInjecting = 'true';
+
+    function appendScript(filename) {
+      return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = chrome.runtime.getURL(filename);
+        script.onload = () => {
+          script.remove();
+          resolve();
+        };
+        script.onerror = () => {
+          script.remove();
+          reject(new Error('Could not load ' + filename + '.'));
+        };
+        (document.head || document.documentElement).appendChild(script);
+      });
+    }
+
+    appendScript('taxonomy-rules.js')
+      .then(() => appendScript('taxonomy-classifier.js'))
+      .then(() => appendScript('page-bridge.js'))
+      .then(() => {
+        document.documentElement.dataset.wsuWdsBridgeInjected = 'true';
+      })
+      .catch(() => {
+        document.documentElement.dataset.wsuWdsBridgeInjected = 'false';
+      })
+      .finally(() => {
+        delete document.documentElement.dataset.wsuWdsBridgeInjecting;
+      });
   }
 
   function getAccessibilityPanelText() {

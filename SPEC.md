@@ -15,10 +15,11 @@ The original extension was recorded in the Digital Accessibility work log as com
 | `0.12.0` | Heading cleanup and compact UI updates |
 | `0.13.0` | `Open Visible List` for background-tab review of visible WordPress list rows |
 | `0.14.0` | Accessibility & Usability issue detection and relevant-tool filtering; `Show all tools` stays on by default |
+| `0.15.0` | Review-first, browser-local suggestions for existing categories and tags; no term creation or save |
 
-The recovered checkout is this repository, with loadable source under `wp-bulk-editor-extension/`. Its canonical upstream is <https://github.com/baschwar/WP-Gutenbrerg-Sidecar-Utility-Chrome-Extension>. It is at commit `1f97e3c`, matching the recorded `0.14.0` release. Its `README.md` is the implementation-level guide.
+The recovered checkout is this repository, with loadable source under `wp-bulk-editor-extension/`. Its canonical upstream is <https://github.com/baschwar/WP-Gutenbrerg-Sidecar-Utility-Chrome-Extension>. The recovered baseline was commit `1f97e3c`, matching the recorded `0.14.0` release; the current source adds the locally validated `0.15.0` taxonomy MVP. Its `README.md` is the implementation-level guide.
 
-Treat the checkout as a recovered baseline. It has not yet been run against a current Chrome, WordPress, Gutenberg, or WSU theme environment.
+Treat `0.14.0` as the recovered baseline. The `0.15.0` classifier and mocked Gutenberg bridge have local automated coverage, but the updated extension has not yet been run against a current Chrome, WordPress, Gutenberg, or WSU theme environment.
 
 ## 3. Architecture
 
@@ -76,6 +77,21 @@ The bridge exists because Gutenberg editor APIs run in the page context. Keep me
 - When it is disabled, show the utilities relevant to detected issues and make the filtering basis understandable to the user.
 - Never hide a tool solely because checker text could not be read.
 
+### 4.7 Category and tag suggestions
+
+- Analyze only the open Gutenberg document after the user selects `Analyze current post`.
+- Keep matching deterministic and browser-local using reviewed rules, phrase aliases, exclusions, source weights, and thresholds.
+- Read existing choices from the visible `category`, `post_tag`, `wsuwp_university_category`, `wsuwp_university_location`, and `wsuwp_university_org` editor controls; never add a new option.
+- Show the taxonomy, term name, score, and match reasons before any editor change.
+- Preserve all existing assignments in default add mode and apply only checked additions to unsaved editor state.
+- Keep `Uncheck all suggestions` non-destructive: it changes only the suggestion checkboxes and never clears existing editor assignments.
+- Provide a default-off replacement mode that requires explicit confirmation and at least one checked suggestion, clears only the five managed panels, reports each removal, and does not save.
+- Provide a default-off homepage News mode exposing Alumni, Donor, Faculty, Staff, and Student tags; precheck a tag when its matching Site Category is assigned or suggested while leaving every audience manually reviewable.
+- For regular posts, ensure `College of Nursing` and `WSU Spokane` are suggested defaults; suggest additional existing locations from reviewed exact names/aliases in content and additional organizations only from full-name matches.
+- Do not create terms, fetch redirect destinations for classification, save, publish, or transmit post content to an AI or third-party classifier.
+- If a registered redirect/external-URL meta field or the visible Redirect Post URL field is set, abstain and explain why.
+- Treat parent and child categories independently; never add a parent solely because a child matched.
+
 ## 5. Non-functional requirements
 
 - Use the existing Manifest V3 structure: a side panel, background service worker, content script, and page bridge.
@@ -84,6 +100,7 @@ The bridge exists because Gutenberg editor APIs run in the page context. Keep me
 - Keep all tool actions responsive and produce a user-visible result or error.
 - Degrade safely when Gutenberg APIs, selectors, cross-origin title fetches, or checker text are unavailable.
 - Keep WSU-specific classes and rules isolated enough to support a future configuration layer. The current recovered implementation has fixed WSU presets; it does not yet have an options/configuration screen.
+- Keep reviewed taxonomy rules in a separate configuration file, and keep the pure classifier testable without WordPress or Chrome APIs.
 
 ## 6. Safety and review rules
 
@@ -92,6 +109,7 @@ The bridge exists because Gutenberg editor APIs run in the page context. Keep me
 - Preserve draft, private, and published status unless the user explicitly changes it in WordPress.
 - Offer confirmation for multi-block or multi-row changes and report exactly what was changed.
 - Do not implement autonomous content rewriting, publishing, deletion, or background scanning.
+- Do not create taxonomy terms. Remove existing assignments only through the explicit, confirmed replacement mode and only from the five documented panels.
 - Do not claim WCAG compliance. The extension is an editing aid and must be followed by human review.
 
 ## 7. Acceptance checks
@@ -117,5 +135,6 @@ For each changed feature:
 ## 9. Deferred work
 
 - A settings/options screen for site-specific class presets and rules.
-- Automated test fixtures for Gutenberg block manipulation and list-screen targeting.
+- Broader reviewed phrase rules for the lengthy University Tag and University Category vocabularies beyond the conservative starter set.
+- Automated test fixtures for Gutenberg block manipulation and list-screen targeting beyond the taxonomy classifier/bridge fixtures.
 - A reviewed compatibility matrix for WordPress/Gutenberg and WSU theme versions.

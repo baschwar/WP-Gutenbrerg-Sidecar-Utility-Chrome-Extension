@@ -1,0 +1,93 @@
+[
+  {
+    "name": "graduate nursing job",
+    "document": {
+      "postType": "nursing-job",
+      "title": "Psychiatric Mental Health Nurse Practitioner (PMHNP)",
+      "headings": ["Qualifications"],
+      "excerpt": "",
+      "body": "Recent PMHNP graduates are encouraged to apply.",
+      "isRedirect": false
+    },
+    "expected": ["category:nursing-jobs", "category:graduate-students"],
+    "excluded": ["category:undergrads"]
+  },
+  {
+    "name": "undergraduate nursing job",
+    "document": {
+      "postType": "nursing-job",
+      "title": "Caregiver",
+      "headings": ["Looking for a flexible job while in college?"],
+      "excerpt": "",
+      "body": "No experience required. A good fit for students exploring health care.",
+      "isRedirect": false
+    },
+    "expected": ["category:nursing-jobs", "category:undergrads"],
+    "excluded": ["category:graduate-students"]
+  },
+  {
+    "name": "redirect post abstains",
+    "document": {
+      "postType": "post",
+      "title": "WSU experts available to discuss wildfires",
+      "headings": [],
+      "excerpt": "",
+      "body": "",
+      "isRedirect": true
+    },
+    "expected": [],
+    "excluded": ["category:research"]
+  },
+  {
+    "name": "rural nursing partnership",
+    "document": {
+      "postType": "post",
+      "title": "College expands Rural Nursing Pathway with health partnership",
+      "headings": [],
+      "excerpt": "A rural health partnership will provide clinical learning for nursing students.",
+      "body": "The Rural Nursing Pathway supports workforce development.",
+      "isRedirect": false
+    },
+    "expected": ["category:student-news", "post_tag:rural-health", "post_tag:rural-nursing-pathway"],
+    "excluded": ["category:event"]
+  },
+  {
+    "name": "international student reflection",
+    "document": {
+      "postType": "post",
+      "title": "Our Last Days in Zambia",
+      "headings": [],
+      "excerpt": "A student reflection from an international program.",
+      "body": "Nursing students in Zambia describe their global learning experience.",
+      "isRedirect": false
+    },
+    "expected": ["category:international-program", "category:student-news", "post_tag:international-program", "post_tag:zambia"],
+    "excluded": []
+  },
+  {
+    "name": "conference recap",
+    "document": {
+      "postType": "post",
+      "title": "Nurse Educator Conference focuses on education and workforce challenges",
+      "headings": ["Professional development"],
+      "excerpt": "WSU alumni and educators shared their expertise.",
+      "body": "The conference supported continuing education for regional nurse educators.",
+      "isRedirect": false
+    },
+    "expected": ["category:alumni-news", "category:continuing-education", "post_tag:continuing-education"],
+    "excluded": ["category:event"]
+  },
+  {
+    "name": "faculty research article",
+    "document": {
+      "postType": "post",
+      "title": "Faculty Research Tackles Health Disparities, Opioid Risk, and Planetary Health",
+      "headings": ["Recent publications"],
+      "excerpt": "College of Nursing faculty describe recent publications.",
+      "body": "Connie Nguyen-Truong, Marian Wilson, and Melissa Vera contribute PhD research addressing opioid risks and planetary health. Learn about the PhD program.",
+      "isRedirect": false
+    },
+    "expected": ["category:faculty-news", "category:phd", "category:research", "wsuwp_university_category:research", "post_tag:dr-connie-nguyen-truong", "post_tag:dr-marian-wilson", "post_tag:dr-melissa-vera", "post_tag:opioid-addiction", "post_tag:phd-program", "post_tag:phd-research", "post_tag:planetary-health"],
+    "excluded": ["category:graduate"]
+  }
+]

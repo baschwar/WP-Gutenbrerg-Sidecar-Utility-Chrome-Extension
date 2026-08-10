@@ -34,6 +34,13 @@ const fontSizeSelect = document.querySelector("#font-size");
 const showAllToolsInput = document.querySelector("#show-all-tools");
 const refreshRelevantToolsButton = document.querySelector("#refresh-relevant-tools");
 const filterSummaryEl = document.querySelector("#filter-summary");
+const analyzeTaxonomiesButton = document.querySelector("#analyze-taxonomies");
+const applyTaxonomySuggestionsButton = document.querySelector("#apply-taxonomy-suggestions");
+const deselectTaxonomySuggestionsButton = document.querySelector("#deselect-taxonomy-suggestions");
+const taxonomySuggestionActionsEl = document.querySelector("#taxonomy-suggestion-actions");
+const taxonomySuggestionsEl = document.querySelector("#taxonomy-suggestions");
+const homepageNewsStoryInput = document.querySelector("#homepage-news-story");
+const replaceTaxonomyAssignmentsInput = document.querySelector("#replace-taxonomy-assignments");
 const feedbackEl = document.querySelector("#feedback");
 const statusEl = document.querySelector("#status");
 const detailsEl = document.querySelector("#details");
@@ -41,6 +48,7 @@ const detailsEl = document.querySelector("#details");
 const SIZE_VALUES = ["Medium", "xMedium", "xxMedium", "Large", "xLarge", "xxLarge"];
 let currentAltSuggestions = [];
 let currentHeadingBlocks = [];
+let currentTaxonomySuggestions = [];
 
 const ISSUE_FIX_RULES = [
   { pattern: /links?\s+(?:is|are)?\s*set\s+to\s+open\s+in\s+a\s+new\s+tab/i, fixes: ["new-tab-link"] },
@@ -279,6 +287,160 @@ async function getActiveWordPressTab() {
 
   return activeTab;
 }
+
+function renderTaxonomySuggestions(response) {
+  currentTaxonomySuggestions = response.suggestions || [];
+  taxonomySuggestionsEl.textContent = "";
+  taxonomySuggestionsEl.hidden = !currentTaxonomySuggestions.length;
+  taxonomySuggestionActionsEl.hidden = !currentTaxonomySuggestions.length;
+
+  currentTaxonomySuggestions.forEach((suggestion, index) => {
+    const item = document.createElement("div");
+    item.className = "suggestion-item";
+
+    const header = document.createElement("label");
+    header.className = "suggestion-header";
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = suggestion.checked !== false;
+    checkbox.dataset.index = String(index);
+
+    const title = document.createElement("span");
+    title.className = "taxonomy-term-name";
+    title.textContent = (suggestion.taxonomyLabel || suggestion.taxonomy) + ": " + suggestion.name;
+
+    if (suggestion.score > 0) {
+      const score = document.createElement("span");
+      score.className = "taxonomy-score";
+      score.textContent = "score " + suggestion.score;
+      title.append(score);
+    }
+    header.append(checkbox, title);
+
+    const meta = document.createElement("div");
+    meta.className = "suggestion-meta";
+    meta.textContent = (suggestion.alreadyAssigned ? "Already selected. " : "")
+      + (suggestion.reason || "Matched a reviewed local rule.");
+
+    item.append(header, meta);
+    taxonomySuggestionsEl.append(item);
+  });
+}
+
+analyzeTaxonomiesButton.addEventListener("click", async () => {
+  analyzeTaxonomiesButton.disabled = true;
+  taxonomySuggestionsEl.hidden = true;
+  taxonomySuggestionActionsEl.hidden = true;
+  taxonomySuggestionsEl.textContent = "";
+  currentTaxonomySuggestions = [];
+  setStatus("Analyzing the open post with local rules...");
+  setDetails("");
+
+  try {
+    const response = await runInEditorTab("analyzeTaxonomySuggestions", {
+      homepageNews: homepageNewsStoryInput.checked,
+      replaceExisting: replaceTaxonomyAssignmentsInput.checked
+    });
+
+    renderTaxonomySuggestions(response);
+    setStatus(response.message);
+    setDetails(response.details || "");
+  } catch (error) {
+    setStatus(error.message || "Could not analyze categories and tags.");
+    setDetails(String(error?.stack || error?.message || error));
+  } finally {
+    analyzeTaxonomiesButton.disabled = false;
+  }
+});
+
+deselectTaxonomySuggestionsButton.addEventListener("click", () => {
+  taxonomySuggestionsEl.querySelectorAll('input[type="checkbox"]').forEach((checkbox) => {
+    checkbox.checked = false;
+  });
+});
+
+replaceTaxonomyAssignmentsInput.addEventListener("change", () => {
+  if (!currentTaxonomySuggestions.length) {
+    return;
+  }
+
+  currentTaxonomySuggestions = [];
+  taxonomySuggestionsEl.textContent = "";
+  taxonomySuggestionsEl.hidden = true;
+  taxonomySuggestionActionsEl.hidden = true;
+  setStatus("Replacement mode changed. Analyze the post again before applying.");
+  setDetails("");
+});
+
+homepageNewsStoryInput.addEventListener("change", () => {
+  if (!currentTaxonomySuggestions.length) {
+    return;
+  }
+
+  currentTaxonomySuggestions = [];
+  taxonomySuggestionsEl.textContent = "";
+  taxonomySuggestionsEl.hidden = true;
+  taxonomySuggestionActionsEl.hidden = true;
+  setStatus("Homepage News mode changed. Analyze the post again before applying.");
+  setDetails("");
+});
+
+applyTaxonomySuggestionsButton.addEventListener("click", async () => {
+  applyTaxonomySuggestionsButton.disabled = true;
+  setStatus("Applying checked categories and tags to the unsaved post...");
+  setDetails("");
+
+  try {
+    const selections = Array.from(taxonomySuggestionsEl.querySelectorAll('input[type="checkbox"]:checked')).map((checkbox) => {
+      const suggestion = currentTaxonomySuggestions[Number.parseInt(checkbox.dataset.index, 10)];
+      return suggestion ? {
+        taxonomy: suggestion.taxonomy,
+        termKey: suggestion.termKey,
+        name: suggestion.name
+      } : null;
+    }).filter(Boolean);
+
+    if (!selections.length) {
+      setStatus(replaceTaxonomyAssignmentsInput.checked
+        ? "Replacement requires at least one checked suggestion."
+        : "No checked category or tag suggestions to apply.");
+      return;
+    }
+
+    let replacementConfirmation = "";
+
+    if (replaceTaxonomyAssignmentsInput.checked) {
+      const confirmed = window.confirm(
+        "Replace all existing Site Categories, University Tags, University Categories, University Locations, and University Organizations with the checked suggestions?\n\nThis changes only the unsaved editor state."
+      );
+
+      if (!confirmed) {
+        setStatus("Existing taxonomy selections were left unchanged.");
+        return;
+      }
+
+      replacementConfirmation = "REPLACE_EXISTING_TAXONOMIES";
+    }
+
+    const response = await runInEditorTab("applyTaxonomySuggestions", {
+      selections,
+      replaceExisting: replaceTaxonomyAssignmentsInput.checked,
+      replacementConfirmation
+    });
+
+    taxonomySuggestionsEl.querySelectorAll('input[type="checkbox"]').forEach((checkbox) => {
+      checkbox.checked = false;
+    });
+    setStatus(response.message);
+    setDetails(response.details || "");
+  } catch (error) {
+    setStatus(error.message || "Could not apply category and tag suggestions.");
+    setDetails(String(error?.stack || error?.message || error));
+  } finally {
+    applyTaxonomySuggestionsButton.disabled = false;
+  }
+});
 
 
 resaveNoDataButton.addEventListener("click", async () => {

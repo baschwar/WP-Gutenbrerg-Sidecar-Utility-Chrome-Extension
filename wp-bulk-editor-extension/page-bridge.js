@@ -24,6 +24,537 @@
     return matches;
   }
 
+  function editorValueToText(value) {
+    if (typeof value === 'string') {
+      return getTextContentFromHtml(value);
+    }
+
+    if (value && typeof value === 'object') {
+      return getTextContentFromHtml(value.raw || value.rendered || '');
+    }
+
+    return '';
+  }
+
+  function collectTaxonomyDocumentText(blocks, result = { headings: [], body: [] }) {
+    const textAttributeKeys = ['body', 'caption', 'citation', 'content', 'description', 'text', 'value'];
+
+    blocks.forEach((block) => {
+      const values = textAttributeKeys.map((key) => block.attributes?.[key]).filter((value) => typeof value === 'string');
+      const blockText = values.map(editorValueToText).filter(Boolean).join(' ');
+
+      if (block.name === 'core/heading' && blockText) {
+        result.headings.push(blockText);
+      } else if (blockText) {
+        result.body.push(blockText);
+      }
+
+      if (block.innerBlocks?.length) {
+        collectTaxonomyDocumentText(block.innerBlocks, result);
+      }
+    });
+
+    return result;
+  }
+
+  function getRedirectMeta(meta) {
+    if (!meta || typeof meta !== 'object') {
+      return null;
+    }
+
+    return Object.entries(meta).find(([key, value]) => {
+      return /(?:redirect|external(?:_|-)url|links?(?:_|-)to)/i.test(key)
+        && typeof value === 'string'
+        && /^https?:\/\//i.test(value.trim());
+    }) || null;
+  }
+
+  function getTaxonomyAnalysisDocument() {
+    const editorSelect = window.wp?.data?.select('core/editor');
+    const postType = editorSelect?.getCurrentPostType?.() || '';
+    const blockText = collectTaxonomyDocumentText(getEditorBlocks());
+    const redirectMeta = getRedirectMeta(editorSelect?.getEditedPostAttribute?.('meta'));
+
+    return {
+      postType,
+      title: editorValueToText(editorSelect?.getEditedPostAttribute?.('title')),
+      excerpt: editorValueToText(editorSelect?.getEditedPostAttribute?.('excerpt')),
+      headings: blockText.headings,
+      body: blockText.body.join(' '),
+      isRedirect: Boolean(redirectMeta),
+      redirectMetaKey: redirectMeta?.[0] || ''
+    };
+  }
+
+  function getTaxonomyFields(config) {
+    const labels = new Map((config?.managedTaxonomies || []).map((item) => [item.slug, item.label]));
+    const fields = new Map();
+
+    document.querySelectorAll('select[name^="tax_input["]').forEach((select) => {
+      const match = select.name.match(/^tax_input\[([^\]]+)\]/);
+      const taxonomy = match?.[1] || '';
+
+      if (!labels.has(taxonomy)) {
+        return;
+      }
+
+      fields.set(taxonomy, {
+        taxonomy,
+        label: labels.get(taxonomy) || taxonomy,
+        select,
+        options: Array.from(select.options)
+      });
+    });
+
+    return fields;
+  }
+
+  function getDocumentSources(document) {
+    return {
+      title: document.title || '',
+      headings: (document.headings || []).join(' '),
+      excerpt: document.excerpt || '',
+      body: document.body || ''
+    };
+  }
+
+  function scoreTermNames(document, names, classifier) {
+    const sources = getDocumentSources(document);
+    const matches = [];
+    let score = 0;
+
+    (names || []).forEach((name) => {
+      Object.entries(sources).forEach(([source, text]) => {
+        if (!classifier.includesPhrase(text, name)) {
+          return;
+        }
+
+        const weight = classifier.SOURCE_WEIGHTS?.[source] || 1;
+        score += weight;
+        matches.push({ name, source, weight });
+      });
+    });
+
+    return { score, matches };
+  }
+
+  function optionName(option) {
+    return (option?.textContent || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function findOptionByName(field, name, classifier) {
+    const normalizedName = classifier.normalizeText(name);
+    return field?.options.find((option) => classifier.normalizeText(optionName(option)) === normalizedName) || null;
+  }
+
+  function getExistingTaxonomyAssignments(fields) {
+    const existing = [];
+
+    fields.forEach((field) => {
+      field.options.filter((option) => option.selected).forEach((option) => {
+        existing.push({
+          taxonomy: field.taxonomy,
+          taxonomyLabel: field.label,
+          name: optionName(option),
+          termKey: String(option.value)
+        });
+      });
+    });
+
+    return existing;
+  }
+
+  function addTaxonomyCandidate(state, candidate) {
+    const field = state.fields.get(candidate.taxonomy);
+    const option = findOptionByName(field, candidate.termName, state.classifier);
+
+    if (!field || !option) {
+      state.missing.add(candidate.taxonomy + ': ' + candidate.termName);
+      return;
+    }
+
+    const key = candidate.taxonomy + ':' + String(option.value);
+
+    if (state.seen.has(key)) {
+      const existingCandidate = state.suggestions.find((item) => item.key === key);
+      if (existingCandidate && candidate.checked) {
+        existingCandidate.checked = true;
+      }
+      return;
+    }
+
+    if (option.selected && !state.replaceExisting && !candidate.showWhenAssigned) {
+      return;
+    }
+
+    state.seen.add(key);
+    state.suggestions.push({
+      key,
+      taxonomy: candidate.taxonomy,
+      taxonomyLabel: field.label,
+      name: optionName(option),
+      termKey: String(option.value),
+      score: candidate.score || 0,
+      reason: candidate.reason || 'Matched a reviewed local rule.',
+      checked: candidate.checked !== false,
+      alreadyAssigned: option.selected
+    });
+  }
+
+  function addConfiguredDefaults(state, config, postType) {
+    (config.defaults || []).filter((item) => (
+      !item.postTypes?.length || item.postTypes.includes(postType)
+    )).forEach((item) => {
+      addTaxonomyCandidate(state, {
+        taxonomy: item.taxonomy,
+        termName: item.termName,
+        score: 100,
+        reason: item.reason,
+        checked: true
+      });
+    });
+  }
+
+  function addUniversityCategoryMatches(state, document) {
+    const field = state.fields.get('wsuwp_university_category');
+
+    if (!field) {
+      return;
+    }
+
+    const nameCounts = new Map();
+    field.options.forEach((option) => {
+      const normalized = state.classifier.normalizeText(optionName(option));
+      nameCounts.set(normalized, (nameCounts.get(normalized) || 0) + 1);
+    });
+
+    field.options.forEach((option) => {
+      const name = optionName(option);
+      const normalized = state.classifier.normalizeText(name);
+
+      if (!name || nameCounts.get(normalized) !== 1) {
+        return;
+      }
+
+      const result = scoreTermNames(document, [name], state.classifier);
+      const wordCount = normalized.split(' ').filter(Boolean).length;
+      const threshold = wordCount === 1 ? 3 : 2;
+
+      if (result.score < threshold) {
+        return;
+      }
+
+      addTaxonomyCandidate(state, {
+        taxonomy: field.taxonomy,
+        termName: name,
+        score: result.score,
+        reason: result.matches.map((match) => (
+          'Matched “' + match.name + '” in ' + match.source + ' (+' + match.weight + ')'
+        )).join('; '),
+        checked: true
+      });
+    });
+  }
+
+  function addLocationAndOrganizationMatches(state, document, config) {
+    const locationField = state.fields.get('wsuwp_university_location');
+    const defaultLocationNames = new Set((config.defaults || []).filter((item) => (
+      item.taxonomy === 'wsuwp_university_location'
+    )).map((item) => state.classifier.normalizeText(item.termName)));
+
+    locationField?.options.forEach((option) => {
+      const name = optionName(option);
+
+      if (defaultLocationNames.has(state.classifier.normalizeText(name))) {
+        return;
+      }
+
+      const aliases = config.locationAliases?.[name] || [name];
+      const result = scoreTermNames(document, aliases, state.classifier);
+
+      if (!result.score) {
+        return;
+      }
+
+      addTaxonomyCandidate(state, {
+        taxonomy: locationField.taxonomy,
+        termName: name,
+        score: result.score,
+        reason: result.matches.map((match) => (
+          'Matched location “' + match.name + '” in ' + match.source
+        )).join('; '),
+        checked: true
+      });
+    });
+
+    const organizationField = state.fields.get('wsuwp_university_org');
+    const defaultOrganizationNames = new Set((config.defaults || []).filter((item) => (
+      item.taxonomy === 'wsuwp_university_org'
+    )).map((item) => state.classifier.normalizeText(item.termName)));
+
+    organizationField?.options.forEach((option) => {
+      const name = optionName(option);
+
+      if (defaultOrganizationNames.has(state.classifier.normalizeText(name))) {
+        return;
+      }
+
+      const result = scoreTermNames(document, [name], state.classifier);
+
+      if (!result.score) {
+        return;
+      }
+
+      addTaxonomyCandidate(state, {
+        taxonomy: organizationField.taxonomy,
+        termName: name,
+        score: result.score,
+        reason: 'Matched the full organization name in the open post.',
+        checked: true
+      });
+    });
+  }
+
+  function addHomepageAudienceCandidates(state, classification, existing, config, enabled, postType) {
+    if (!enabled || postType !== 'post') {
+      return;
+    }
+
+    const existingCategoryNames = new Set(existing.filter((item) => item.taxonomy === 'category').map((item) => (
+      state.classifier.normalizeText(item.name)
+    )));
+    const matchedCategoryNames = new Set(classification.suggestions.filter((item) => item.taxonomy === 'category').map((item) => (
+      state.classifier.normalizeText(item.configuredLabel)
+    )));
+    const existingTagNames = new Set(existing.filter((item) => item.taxonomy === 'post_tag').map((item) => (
+      state.classifier.normalizeText(item.name)
+    )));
+
+    (config.homepageAudiences || []).forEach((audience) => {
+      const categoryName = state.classifier.normalizeText(audience.categoryName);
+      const tagName = state.classifier.normalizeText(audience.tagName);
+      const inferred = existingCategoryNames.has(categoryName) || matchedCategoryNames.has(categoryName);
+      const alreadyTagged = existingTagNames.has(tagName);
+
+      addTaxonomyCandidate(state, {
+        taxonomy: 'post_tag',
+        termName: audience.tagName,
+        score: inferred ? 100 : 0,
+        reason: inferred
+          ? audience.categoryName + ' is assigned or suggested as a Site Category for the homepage News feed.'
+          : 'Homepage News is enabled. Check this audience only if it applies.',
+        checked: inferred || alreadyTagged,
+        showWhenAssigned: true
+      });
+    });
+  }
+
+  function hasVisibleRedirectValue() {
+    return Array.from(document.querySelectorAll('input, textarea')).some((field) => {
+      const identity = [field.id, field.name, field.getAttribute('aria-label')].filter(Boolean).join(' ');
+      return /(?:redirect|links?(?:_|\s|-)to)/i.test(identity) && /^https?:\/\//i.test((field.value || '').trim());
+    });
+  }
+
+  async function analyzeTaxonomySuggestions(payload) {
+    const classifier = window.WSU_WDS_TAXONOMY_CLASSIFIER;
+    const config = window.WSU_WDS_TAXONOMY_CONFIG;
+
+    if (!window.wp?.data || !classifier?.classifyDocument || !Array.isArray(config?.rules)) {
+      return {
+        ok: false,
+        message: 'The local category and tag analyzer is unavailable.',
+        suggestions: []
+      };
+    }
+
+    const document = getTaxonomyAnalysisDocument();
+    document.isRedirect = document.isRedirect || hasVisibleRedirectValue();
+
+    if (!document.postType) {
+      return { ok: false, message: 'Open this on a WordPress block editor page first.', suggestions: [] };
+    }
+
+    const classification = classifier.classifyDocument(document, config.rules);
+
+    if (classification.skipped) {
+      return {
+        ok: true,
+        message: 'No category or tag suggestions were made for this redirect post.',
+        suggestions: [],
+        details: classification.reason + (document.redirectMetaKey ? '\nDetected field: ' + document.redirectMetaKey : '')
+      };
+    }
+
+    const fields = getTaxonomyFields(config);
+
+    if (!fields.size) {
+      return {
+        ok: false,
+        message: 'Could not find the WSU taxonomy panels in this editor.',
+        suggestions: [],
+        details: 'Reload the WordPress editor tab after reloading the extension.'
+      };
+    }
+
+    const existing = getExistingTaxonomyAssignments(fields);
+    const state = {
+      classifier,
+      fields,
+      missing: new Set(),
+      replaceExisting: Boolean(payload?.replaceExisting),
+      seen: new Set(),
+      suggestions: []
+    };
+
+    classification.suggestions.forEach((suggestion) => {
+      addTaxonomyCandidate(state, {
+        taxonomy: suggestion.taxonomy,
+        termName: suggestion.configuredLabel,
+        score: suggestion.score,
+        reason: suggestion.reason,
+        checked: true
+      });
+    });
+    addConfiguredDefaults(state, config, document.postType);
+    addUniversityCategoryMatches(state, document);
+    addLocationAndOrganizationMatches(state, document, config);
+    addHomepageAudienceCandidates(
+      state,
+      classification,
+      existing,
+      config,
+      Boolean(payload?.homepageNews),
+      document.postType
+    );
+
+    state.suggestions.sort((left, right) => (
+      right.score - left.score
+      || left.taxonomyLabel.localeCompare(right.taxonomyLabel)
+      || left.name.localeCompare(right.name)
+    ));
+
+    const details = [];
+
+    if (existing.length) {
+      details.push((state.replaceExisting
+        ? 'Existing assignments will be cleared unless represented by a checked suggestion below:\n'
+        : 'Existing assignments preserved:\n') + existing.map((item) => (
+        '- ' + item.taxonomyLabel + ': ' + item.name
+      )).join('\n'));
+    }
+
+    if (state.missing.size) {
+      details.push('Reviewed terms not available in the visible taxonomy panels:\n- ' + Array.from(state.missing).join('\n- '));
+    }
+
+    if (!state.suggestions.length) {
+      details.push(classification.reason || 'All matched terms are already assigned or unavailable.');
+    }
+
+    return {
+      ok: true,
+      message: state.suggestions.length
+        ? 'Found ' + state.suggestions.length + ' existing taxonomy suggestion' + (state.suggestions.length === 1 ? '' : 's') + '. Review before applying.'
+        : 'No new category or tag suggestions met the reviewed rules.',
+      suggestions: state.suggestions,
+      existing,
+      details: details.join('\n\n')
+    };
+  }
+
+  async function applyTaxonomySuggestions(payload) {
+    const config = window.WSU_WDS_TAXONOMY_CONFIG;
+    const selections = Array.isArray(payload?.selections) ? payload.selections.slice(0, 50) : [];
+    const replaceExisting = Boolean(payload?.replaceExisting);
+
+    if (!window.wp?.data || !Array.isArray(config?.rules)) {
+      return { ok: false, message: 'The local category and tag analyzer is unavailable.' };
+    }
+
+    if (!selections.length) {
+      return {
+        ok: false,
+        message: replaceExisting
+          ? 'Replacement requires at least one checked suggestion.'
+          : 'No checked category or tag suggestions to apply.'
+      };
+    }
+
+    if (replaceExisting && payload?.replacementConfirmation !== 'REPLACE_EXISTING_TAXONOMIES') {
+      return { ok: false, message: 'Replacement was not confirmed. Existing taxonomy selections were preserved.' };
+    }
+
+    const fields = getTaxonomyFields(config);
+    const targets = new Set();
+
+    selections.forEach((selection) => {
+      const field = fields.get(selection?.taxonomy);
+      const option = field?.options.find((item) => (
+        String(item.value) === String(selection?.termKey)
+        && optionName(item) === selection?.name
+      ));
+
+      if (option) {
+        targets.add(field.taxonomy + ':' + String(option.value));
+      }
+    });
+
+    const added = [];
+    const removed = [];
+
+    fields.forEach((field) => {
+      let fieldChanged = false;
+
+      field.options.forEach((option) => {
+        const key = field.taxonomy + ':' + String(option.value);
+        const shouldSelect = targets.has(key) || (!replaceExisting && option.selected);
+
+        if (option.selected === shouldSelect) {
+          return;
+        }
+
+        if (shouldSelect) {
+          added.push(field.label + ': ' + optionName(option));
+        } else {
+          removed.push(field.label + ': ' + optionName(option));
+        }
+
+        option.selected = shouldSelect;
+        fieldChanged = true;
+      });
+
+      if (fieldChanged) {
+        field.select.dispatchEvent(new Event('input', { bubbles: true }));
+        field.select.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    });
+
+    if (!added.length && !removed.length) {
+      return {
+        ok: true,
+        message: 'No taxonomy selections changed.',
+        details: 'The checked terms were already selected or unavailable. Post was not saved.'
+      };
+    }
+
+    const details = [];
+
+    if (added.length) {
+      details.push('Selected:\n' + added.map((change) => '- ' + change).join('\n'));
+    }
+
+    if (removed.length) {
+      details.push('Cleared:\n' + removed.map((change) => '- ' + change).join('\n'));
+    }
+
+    return {
+      ok: true,
+      message: (replaceExisting ? 'Replaced' : 'Updated') + ' taxonomy selections in the open editor. Post was not saved.',
+      details: details.join('\n\n') + '\n\nReview the visible WordPress taxonomy panels and save when ready.'
+    };
+  }
+
   function makeAllHeadingsH2() {
     if (!window.wp?.data) {
       return { ok: false, message: 'Open this on a WordPress block editor page first.' };
@@ -1508,6 +2039,8 @@
   }
 
   const actions = {
+    analyzeTaxonomySuggestions,
+    applyTaxonomySuggestions,
     makeAllHeadingsH2,
     applyH2FontSize,
     changeHeadingLevel,

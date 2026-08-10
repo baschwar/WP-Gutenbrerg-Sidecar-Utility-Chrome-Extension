@@ -33,6 +33,24 @@
       </section>
 
       <section class="panel">
+        <h2>Categories &amp; Tags</h2>
+        <div class="utility-card" data-fixes="taxonomy categorization tagging">
+          <h3 class="tooltip-heading"><span>Suggest Existing Terms</span><button class="tooltip-trigger" type="button" aria-label="Analyze the open Gutenberg document with local reviewed rules, then suggest existing categories and tags for approval. Nothing is saved.">?</button><span class="tooltip-text" role="tooltip">Analyze the open Gutenberg document with local reviewed rules, then suggest existing categories and tags for approval. Nothing is saved.</span></h3>
+          <p>Uses browser-local rules and existing terms only. WordPress is not saved.</p>
+          <div class="taxonomy-mode-options">
+            <label class="compact-check"><input id="homepage-news-story" type="checkbox"> Homepage news story</label>
+            <label class="compact-check danger-check"><input id="replace-taxonomy-assignments" type="checkbox"> Replace all existing taxonomy selections</label>
+          </div>
+          <button id="analyze-taxonomies" type="button">Analyze current post</button>
+          <div id="taxonomy-suggestions" class="suggestion-list compact-list" hidden></div>
+          <div class="button-row" id="taxonomy-suggestion-actions" hidden>
+            <button id="deselect-taxonomy-suggestions" class="secondary" type="button">Uncheck all suggestions</button>
+            <button id="apply-taxonomy-suggestions" type="button">Apply checked</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
         <h2>Headings</h2>
         <div class="action-grid">
           <div class="utility-card compact-card" data-fixes="heading-order">

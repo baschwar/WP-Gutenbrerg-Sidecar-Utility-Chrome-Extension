@@ -28,6 +28,19 @@ Important: after reloading or updating the extension, reload any open WordPress 
 - Open every visible edit link from any WordPress `edit.php` list screen—including Pages, Posts, and custom post types—in new background tabs for batch review.
 - `Open Visible List` never saves, updates, publishes, drafts, or otherwise changes an item.
 
+### Categories & Tags
+
+- Analyze the open Gutenberg title, excerpt, headings, and block text with deterministic browser-local rules.
+- Read only existing choices from the visible Site Categories, University Tags, University Categories, University Locations, and University Organizations panels.
+- Explain the phrase matches and source weighting behind every suggestion.
+- Preserve current assignments in the default add mode and apply only checked additions to the unsaved editor state.
+- `Uncheck all suggestions` clears only the review checkboxes; it does not remove existing WordPress assignments.
+- Offer an explicit, confirmation-gated replacement mode that clears the five managed panels and keeps only checked suggestions; replacement requires at least one checked term and reports every cleared selection.
+- Offer a `Homepage news story` mode with Alumni, Donor, Faculty, Staff, and Student audience tags. Matching Site Categories precheck the corresponding tag; all five remain available for manual review.
+- Default regular posts to the existing `College of Nursing` organization and `WSU Spokane` location, while suggesting additional existing University Locations when their reviewed names or aliases appear in content.
+- Abstain from analyzing a redirect destination when a registered redirect/external-URL meta field is detected.
+- Never create terms, save, publish, fetch redirect destinations, or send post content to ChatGPT, Codex, OpenAI, or another classification service.
+
 ### Headings
 
 - Fix incorrect heading order by making content headings H2.
@@ -104,7 +117,34 @@ Primary files:
 - `sidepanel.html`, `sidepanel.css`, `sidepanel.js`: side panel UI.
 - `content.js`: content-script bridge.
 - `page-bridge.js`: page-context Gutenberg utilities.
+- `taxonomy-rules.js`: reviewed WSU College of Nursing starter vocabulary and matching rules.
+- `taxonomy-classifier.js`: deterministic, browser-local text normalization, weighting, exclusions, and scoring.
+
+## Taxonomy MVP Limits
+
+- The starter rules cover reviewed Site Category and University Tag examples for Nursing Jobs, student/international news, continuing education, alumni, donor, staff, faculty/PhD research, and selected people/topic tags.
+- University Categories use conservative exact-name matching against the existing 39 editor options. Single-word terms must match a title or heading; duplicated names are not automatically suggested.
+- University Tags are not guessed across the full long list. Reviewed rules and the five homepage News audience controls provide the current tag allowlist.
+- `College of Nursing` and `WSU Spokane` are reviewed defaults for regular posts. Other organizations require their full existing name in content; additional locations require an existing name or configured alias.
+- Redirect detection checks registered post meta and the visible Redirect Post URL field. The extension never fetches the redirect destination for classification.
+- The tool uses the existing underlying WSU taxonomy select controls rather than relying on the WAF-blocked REST endpoint. It does not add new options.
+- The classifier fixtures are short public-example summaries rather than production WordPress exports.
+
+## Local Validation
+
+Run from the repository root:
+
+```sh
+node --test --test-timeout=5000 tests/taxonomy-classifier.test.js tests/taxonomy-bridge.test.js
+node --check wp-bulk-editor-extension/sidepanel.js
+node --check wp-bulk-editor-extension/content.js
+node --check wp-bulk-editor-extension/page-bridge.js
+node --check wp-bulk-editor-extension/taxonomy-rules.js
+node --check wp-bulk-editor-extension/taxonomy-classifier.js
+```
+
+The bridge fixtures cover all five WSU panels, homepage audiences, organization/location defaults, an additional content-matched location, add mode, confirmation-gated replacement, redirect abstention, and the no-save boundary. The live editor taxonomy structure was inspected read-only; applying and saving changes still requires an authorized manual review.
 
 ## Version
 
-Current extension version: `0.14.0`.
+Current extension version: `0.15.0`.

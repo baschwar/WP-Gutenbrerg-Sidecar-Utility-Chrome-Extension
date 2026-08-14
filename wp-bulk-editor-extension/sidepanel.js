@@ -1,6 +1,7 @@
 const fixHeadingOrderButton = document.querySelector("#fix-heading-order");
 const fixUrlLinkTextButton = document.querySelector("#fix-url-link-text");
 const fixGenericLinkTextButton = document.querySelector("#fix-generic-link-text");
+const fixEmailLinkTextButton = document.querySelector("#fix-email-link-text");
 const fixUrlDefenseLinksButton = document.querySelector("#fix-urldefense-links");
 const fixNewTabLinksButton = document.querySelector("#fix-new-tab-links");
 const fixLinkedImageAltButton = document.querySelector("#fix-linked-image-alt");
@@ -41,6 +42,15 @@ const taxonomySuggestionActionsEl = document.querySelector("#taxonomy-suggestion
 const taxonomySuggestionsEl = document.querySelector("#taxonomy-suggestions");
 const homepageNewsStoryInput = document.querySelector("#homepage-news-story");
 const replaceTaxonomyAssignmentsInput = document.querySelector("#replace-taxonomy-assignments");
+const textSearchInput = document.querySelector("#text-search");
+const textReplacementInput = document.querySelector("#text-replacement");
+const textSearchCaseSensitiveInput = document.querySelector("#text-search-case-sensitive");
+const textSearchWholeWordInput = document.querySelector("#text-search-whole-word");
+const findTextButton = document.querySelector("#find-text");
+const findNextTextButton = document.querySelector("#find-next-text");
+const replaceCurrentTextButton = document.querySelector("#replace-current-text");
+const replaceAllTextButton = document.querySelector("#replace-all-text");
+const textReplacementCurrentEl = document.querySelector("#text-replacement-current");
 const feedbackEl = document.querySelector("#feedback");
 const statusEl = document.querySelector("#status");
 const detailsEl = document.querySelector("#details");
@@ -49,10 +59,14 @@ const SIZE_VALUES = ["Medium", "xMedium", "xxMedium", "Large", "xLarge", "xxLarg
 let currentAltSuggestions = [];
 let currentHeadingBlocks = [];
 let currentTaxonomySuggestions = [];
+let currentTextReplacementCandidates = [];
+let currentTextReplacementQuery = null;
+let currentTextReplacementIndex = -1;
 
 const ISSUE_FIX_RULES = [
   { pattern: /links?\s+(?:is|are)?\s*set\s+to\s+open\s+in\s+a\s+new\s+tab/i, fixes: ["new-tab-link"] },
   { pattern: /links?\s+with\s+generic\s+text/i, fixes: ["generic-link-text"] },
+  { pattern: /(?:email links? with (?:generic text|email addresses? as (?:the )?link text)|email addresses? used as link text)/i, fixes: ["email-link-text"] },
   { pattern: /incorrect\s+heading\s+order/i, fixes: ["heading-order", "heading-level"] },
   { pattern: /urldefense\.com/i, fixes: ["urldefense-link"] },
   { pattern: /safelinks\.protection\.outlook\.com/i, fixes: ["safelinks-link"] },
@@ -442,6 +456,243 @@ applyTaxonomySuggestionsButton.addEventListener("click", async () => {
   }
 });
 
+function getTextReplacementQuery() {
+  return {
+    search: textSearchInput.value,
+    replacement: textReplacementInput.value,
+    caseSensitive: textSearchCaseSensitiveInput.checked,
+    wholeWord: textSearchWholeWordInput.checked
+  };
+}
+
+function expandTextReplacementCandidates(candidates) {
+  const renderedOffsets = new Map();
+
+  return candidates.flatMap((candidate) => {
+    const renderedKey = candidate.target === "block"
+      ? `block:${candidate.clientId}`
+      : `post:${candidate.field}`;
+    const renderedOffset = renderedOffsets.get(renderedKey) || 0;
+    renderedOffsets.set(renderedKey, renderedOffset + candidate.count);
+
+    return Array.from({ length: candidate.count }, (_value, occurrenceIndex) => ({
+      ...candidate,
+      occurrenceIndex,
+      renderedOccurrenceIndex: renderedOffset + occurrenceIndex,
+      preview: candidate.previews?.[occurrenceIndex] || candidate.preview
+    }));
+  });
+}
+
+function clearEditorTextHighlight() {
+  getEditorTab()
+    .then((tab) => chrome.tabs.sendMessage(tab.id, {
+      source: "WSU_WDS_SIDEPANEL",
+      action: "clearTextReplacementHighlight",
+      payload: {}
+    }))
+    .catch(() => {});
+}
+
+function clearTextReplacementResults(message = "") {
+  clearEditorTextHighlight();
+  currentTextReplacementCandidates = [];
+  currentTextReplacementQuery = null;
+  currentTextReplacementIndex = -1;
+  textReplacementCurrentEl.hidden = true;
+  textReplacementCurrentEl.textContent = "";
+  findNextTextButton.disabled = true;
+  replaceCurrentTextButton.disabled = true;
+
+  if (message) {
+    setStatus(message);
+  }
+}
+
+async function showCurrentTextReplacement() {
+  const candidate = currentTextReplacementCandidates[currentTextReplacementIndex];
+
+  if (!candidate) {
+    clearEditorTextHighlight();
+    textReplacementCurrentEl.hidden = true;
+    findNextTextButton.disabled = true;
+    replaceCurrentTextButton.disabled = true;
+    return;
+  }
+
+  textReplacementCurrentEl.textContent = "";
+  const heading = document.createElement("strong");
+  heading.textContent = `Match ${currentTextReplacementIndex + 1} of ${currentTextReplacementCandidates.length} — ${candidate.label}`;
+  const preview = document.createElement("div");
+  preview.className = "text-replacement-preview";
+  preview.textContent = candidate.preview || "Matching text";
+  textReplacementCurrentEl.append(heading, preview);
+  textReplacementCurrentEl.hidden = false;
+  findNextTextButton.disabled = currentTextReplacementCandidates.length < 2;
+  replaceCurrentTextButton.disabled = false;
+
+  try {
+    await runInEditorTab("focusTextReplacementCandidate", {
+      target: candidate,
+      search: currentTextReplacementQuery?.search || "",
+      caseSensitive: currentTextReplacementQuery?.caseSensitive,
+      wholeWord: currentTextReplacementQuery?.wholeWord,
+      renderedOccurrenceIndex: candidate.renderedOccurrenceIndex
+    });
+  } catch (_error) {
+    // The side-panel preview remains usable when the editor cannot scroll to a block.
+  }
+}
+
+async function findTextMatches({ preserveIndex = false } = {}) {
+  const query = getTextReplacementQuery();
+
+  if (!query.search.length) {
+    clearTextReplacementResults("Enter text to find first.");
+    textSearchInput.focus();
+    return null;
+  }
+
+  const previousIndex = currentTextReplacementIndex;
+  setStatus("Finding text in the open editor...");
+  setDetails("");
+  const response = await runInEditorTab("scanTextReplacements", query);
+
+  if (!response.ok) {
+    throw new Error(response.message || "Could not find text.");
+  }
+
+  currentTextReplacementQuery = query;
+  currentTextReplacementCandidates = expandTextReplacementCandidates(response.candidates || []);
+  currentTextReplacementIndex = currentTextReplacementCandidates.length
+    ? Math.min(preserveIndex ? Math.max(previousIndex, 0) : 0, currentTextReplacementCandidates.length - 1)
+    : -1;
+  setStatus(response.message);
+  setDetails(response.details || "");
+  await showCurrentTextReplacement();
+  return response;
+}
+
+findTextButton.addEventListener("click", async () => {
+  findTextButton.disabled = true;
+
+  try {
+    await findTextMatches();
+  } catch (error) {
+    clearTextReplacementResults();
+    setStatus(error.message || "Could not find text.");
+    setDetails(String(error?.stack || error?.message || error));
+  } finally {
+    findTextButton.disabled = false;
+  }
+});
+
+findNextTextButton.addEventListener("click", async () => {
+  if (!currentTextReplacementCandidates.length) {
+    return;
+  }
+
+  currentTextReplacementIndex = (currentTextReplacementIndex + 1) % currentTextReplacementCandidates.length;
+  setStatus(currentTextReplacementIndex === 0 ? "Wrapped to the first match." : "Moved to the next match.");
+  await showCurrentTextReplacement();
+});
+
+replaceCurrentTextButton.addEventListener("click", async () => {
+  const candidate = currentTextReplacementCandidates[currentTextReplacementIndex];
+
+  if (!candidate || !currentTextReplacementQuery) {
+    clearTextReplacementResults("Find a current match before replacing it.");
+    return;
+  }
+
+  replaceCurrentTextButton.disabled = true;
+  setStatus("Replacing the current match...");
+  setDetails("");
+
+  try {
+    const response = await runInEditorTab("applySingleTextReplacement", {
+      ...currentTextReplacementQuery,
+      replacement: textReplacementInput.value,
+      target: candidate,
+      occurrenceIndex: candidate.occurrenceIndex
+    });
+
+    if (!response.ok) {
+      throw new Error(response.message || "Could not replace the current match.");
+    }
+
+    setStatus(response.message);
+    setDetails(response.details || "");
+    await findTextMatches({ preserveIndex: true });
+  } catch (error) {
+    setStatus(error.message || "Could not replace the current match.");
+    setDetails(String(error?.stack || error?.message || error));
+  } finally {
+    replaceCurrentTextButton.disabled = !currentTextReplacementCandidates.length;
+  }
+});
+
+replaceAllTextButton.addEventListener("click", async () => {
+  const query = getTextReplacementQuery();
+
+  if (!query.search.length) {
+    clearTextReplacementResults("Enter text to find first.");
+    textSearchInput.focus();
+    return;
+  }
+
+  replaceAllTextButton.disabled = true;
+  setStatus("Finding all matches before replacement...");
+  setDetails("");
+
+  try {
+    const scan = await runInEditorTab("scanTextReplacements", query);
+
+    if (!scan.ok) {
+      throw new Error(scan.message || "Could not find text.");
+    }
+
+    if (!(scan.candidates || []).length) {
+      clearTextReplacementResults(scan.message);
+      setDetails(scan.details || "Nothing was changed or saved.");
+      return;
+    }
+
+    const response = await runInEditorTab("applyTextReplacements", {
+      ...query,
+      targets: scan.candidates
+    });
+
+    if (!response.ok) {
+      throw new Error(response.message || "Could not replace all text.");
+    }
+
+    clearTextReplacementResults();
+    setStatus(response.message);
+    setDetails(response.details || "");
+  } catch (error) {
+    setStatus(error.message || "Could not replace all text.");
+    setDetails(String(error?.stack || error?.message || error));
+  } finally {
+    replaceAllTextButton.disabled = false;
+  }
+});
+
+[textSearchInput, textSearchCaseSensitiveInput, textSearchWholeWordInput].forEach((control) => {
+  control.addEventListener("input", () => {
+    if (currentTextReplacementQuery) {
+      clearTextReplacementResults("Search options changed. Choose Find to start again.");
+    }
+  });
+});
+
+textSearchInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    findTextButton.click();
+  }
+});
+
 
 resaveNoDataButton.addEventListener("click", async () => {
   resaveNoDataButton.disabled = true;
@@ -604,6 +855,24 @@ fixGenericLinkTextButton.addEventListener("click", () => {
     emptyMessage: "No generic link text found.",
     errorMessage: "Could not fix generic link text."
   });
+});
+
+fixEmailLinkTextButton.addEventListener("click", async () => {
+  fixEmailLinkTextButton.disabled = true;
+  setStatus("Fixing email link text...");
+  setDetails("");
+
+  try {
+    const response = await runInEditorTab("fixEmailLinkText");
+
+    setStatus(response.message);
+    setDetails(response.details || "");
+  } catch (error) {
+    setStatus(error.message || "Could not fix email link text.");
+    setDetails(String(error?.stack || error?.message || error));
+  } finally {
+    fixEmailLinkTextButton.disabled = false;
+  }
 });
 
 fixUrlDefenseLinksButton.addEventListener("click", async () => {

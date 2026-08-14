@@ -16,10 +16,12 @@ The original extension was recorded in the Digital Accessibility work log as com
 | `0.13.0` | `Open Visible List` for background-tab review of visible WordPress list rows |
 | `0.14.0` | Accessibility & Usability issue detection and relevant-tool filtering; `Show all tools` stays on by default |
 | `0.15.0` | Review-first, browser-local suggestions for existing categories and tags; no term creation or save |
+| `0.16.0` | Familiar find/find-next/replace/replace-all workflow for open Gutenberg content; no save |
+| `0.17.0` | Conservative email-link text cleanup using action-and-recipient labels; no save |
 
-The recovered checkout is this repository, with loadable source under `wp-bulk-editor-extension/`. Its canonical upstream is <https://github.com/baschwar/WP-Gutenbrerg-Sidecar-Utility-Chrome-Extension>. The recovered baseline was commit `1f97e3c`, matching the recorded `0.14.0` release; the current source adds the locally validated `0.15.0` taxonomy MVP. Its `README.md` is the implementation-level guide.
+The recovered checkout is this repository, with loadable source under `wp-bulk-editor-extension/`. Its canonical upstream is <https://github.com/baschwar/WP-Gutenbrerg-Sidecar-Utility-Chrome-Extension>. The recovered baseline was commit `1f97e3c`, matching the recorded `0.14.0` release; the current source adds the locally validated `0.15.0` taxonomy MVP, `0.16.0` text search and replace workflow, and `0.17.0` email-link text cleanup. Its `README.md` is the implementation-level guide.
 
-Treat `0.14.0` as the recovered baseline. The `0.15.0` classifier and mocked Gutenberg bridge have local automated coverage, but the updated extension has not yet been run against a current Chrome, WordPress, Gutenberg, or WSU theme environment.
+Treat `0.14.0` as the recovered baseline. The `0.15.0` classifier and `0.16.0` search and replace bridge have local automated coverage, but the updated extension has not yet been run against a current Chrome, WordPress, Gutenberg, or WSU theme environment.
 
 ## 3. Architecture
 
@@ -56,6 +58,10 @@ The bridge exists because Gutenberg editor APIs run in the page context. Keep me
 - Unwrap URLDefense and Outlook Safe Links before title lookup when possible.
 - Offer removal of `target="_blank"` / open-in-new-tab behavior.
 - Preserve a link when title lookup fails. Report the failure rather than replacing text with a guess.
+- For `mailto:` links whose visible text is the address, the inferred recipient name, or a generic email label, use visible action-and-recipient text such as `Email Kathleen Finch` while preserving the full `mailto:` destination.
+- Format the mailbox name before `@`: dot-separated personal names become spaced and capitalized, while a department or business mailbox becomes a single capitalized name, such as `development@wsu.edu` to `Email Development`.
+- Leave already descriptive links and custom meaningful link text unchanged.
+- Keep the visible email-link text and accessible name aligned without adding hidden text or an ARIA label.
 
 ### 4.4 Image alt-text support
 
@@ -65,6 +71,11 @@ The bridge exists because Gutenberg editor APIs run in the page context. Keep me
 
 ### 4.5 Text cleanup
 
+- Search literal visible text in the title, excerpt, and editable Gutenberg rich-text attributes.
+- Provide `Find`, wrapping `Find next`, single-current-match `Replace`, and `Replace all` commands with case-sensitive and whole-word options.
+- Identify the current match in the side panel, highlight its rendered text in yellow, and select/scroll its Gutenberg block into view when available.
+- Replace text nodes only, preserving block structure, inline markup, links, URLs, HTML attributes, taxonomy assignments, and unrelated settings.
+- Keep replacements in unsaved editor state and report exact replacement counts; never save or change post status.
 - Convert all-bold paragraphs over a configurable character threshold to normal paragraph text; the documented default is 120 characters.
 - Convert all-bold section labels at or under a configurable word threshold to H2 headings with the WSU xMedium style; the documented default is 4 words.
 - Split a leading bold line followed by a soft return into an H2 xMedium plus the remaining normal paragraph, including markup where the soft return is inside the bold element.

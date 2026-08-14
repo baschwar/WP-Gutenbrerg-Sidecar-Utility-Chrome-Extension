@@ -28,6 +28,8 @@
 
     appendScript('taxonomy-rules.js')
       .then(() => appendScript('taxonomy-classifier.js'))
+      .then(() => appendScript('text-replace.js'))
+      .then(() => appendScript('email-link.js'))
       .then(() => appendScript('page-bridge.js'))
       .then(() => {
         document.documentElement.dataset.wsuWdsBridgeInjected = 'true';
@@ -67,6 +69,7 @@
       /linked image missing alt text/ig,
       /links?\s+(?:is|are)?\s*set\s+to\s+open\s+in\s+a\s+new\s+tab/ig,
       /links? with generic text/ig,
+      /(?:email links? with (?:generic text|email addresses? as (?:the )?link text)|email addresses? used as link text)/ig,
       /incorrect heading order/ig,
       /links? with urldefense\.com in the URL/ig,
       /(?:link text containing the URL protocol|links? containing the URL protocol|URL protocol[^.]*link text)/ig,

@@ -60,12 +60,20 @@ Important: after reloading or updating the extension, reload any open WordPress 
 
 - Replace URL-like link text with linked page titles.
 - Replace generic link text such as `here`, `click here`, and `read more` with linked page titles.
+- Replace a linked email address, recipient name, or generic email label with action-and-recipient text such as `Email Kathleen Finch`, while preserving the `mailto:` address and any subject parameters.
+- Format dot-separated personal mailbox names as spaced names and single department or business mailboxes as a capitalized name, such as `development@wsu.edu` to `Email Development`.
+- Leave already descriptive labels and other meaningful custom email-link text unchanged.
 - Unwrap URLDefense and Outlook Safe Links copied from email into their original destination URLs.
 - Remove open-in-new-tab behavior from rich text links.
 - Scan nested table/list rich text so link fixes can apply inside table cells and other structured block attributes.
 
 ### Text Cleanup
 
+- Find literal text in the open page/post title, excerpt, and editable Gutenberg rich-text fields.
+- Use familiar `Find`, `Find next`, `Replace`, and `Replace all` commands with optional case-sensitive and whole-word matching.
+- Highlight the current rendered match in yellow, select and scroll its Gutenberg block into view when possible, wrap `Find next` to the first match, and report the current match in the side panel.
+- Replace visible text only while preserving inline markup and link destinations; empty replacement text is supported for removal.
+- Keep all replacements in unsaved editor state for review. The tool never saves or changes post status.
 - Unbold all-bold paragraphs over a configurable character threshold (120 by default).
 - Convert all-bold paragraphs at or under a configurable word threshold (4 by default) to H2 xMedium.
 - Split a leading bold line followed by a soft return into an H2 xMedium plus a following paragraph, including a soft return inside the bold element.
@@ -136,15 +144,21 @@ Run from the repository root:
 
 ```sh
 node --test --test-timeout=5000 tests/taxonomy-classifier.test.js tests/taxonomy-bridge.test.js
+node --test --test-timeout=5000 tests/text-replace.test.js
+node --test --test-timeout=5000 tests/email-link.test.js
 node --check wp-bulk-editor-extension/sidepanel.js
 node --check wp-bulk-editor-extension/content.js
 node --check wp-bulk-editor-extension/page-bridge.js
 node --check wp-bulk-editor-extension/taxonomy-rules.js
 node --check wp-bulk-editor-extension/taxonomy-classifier.js
+node --check wp-bulk-editor-extension/text-replace.js
+node --check wp-bulk-editor-extension/email-link.js
 ```
 
-The bridge fixtures cover all five WSU panels, homepage audiences, organization/location defaults, an additional content-matched location, add mode, confirmation-gated replacement, redirect abstention, and the no-save boundary. The live editor taxonomy structure was inspected read-only; applying and saving changes still requires an authorized manual review.
+The bridge fixtures cover all five WSU panels, homepage audiences, organization/location defaults, an additional content-matched location, add mode, confirmation-gated taxonomy replacement, redirect abstention, text searching, single-match replacement, replace-all behavior, and the no-save boundary. Text matching tests cover literal special characters, case sensitivity, whole words, and selecting a single occurrence. Email-link tests cover personal names, department or business mailboxes, `mailto:` query parameters, already descriptive links, and meaningful custom labels. Local browser fixtures verified the side-panel commands, movement of the yellow native highlight between rendered matches, highlight cleanup, preservation of inline markup and link destinations, and email-link updates without calling save. Live application against a current WordPress/Gutenberg editor still requires authorized manual review.
+
+Search and replace operates on editable rich-text attributes exposed by Gutenberg plus the post title and excerpt. It does not rewrite block settings, URLs, HTML attributes, taxonomy values, custom fields, or text generated dynamically by a server-side block. A phrase split across separate inline text nodes may appear visually continuous but is treated as separate text for replacement.
 
 ## Version
 
-Current extension version: `0.15.0`.
+Current extension version: `0.17.0`.

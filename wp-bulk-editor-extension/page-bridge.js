@@ -755,6 +755,566 @@
     'value'
   ];
 
+  function getTextReplaceEngine() {
+    return window.WSU_WDS_TEXT_REPLACE;
+  }
+
+  function textSearchOptions(payload = {}) {
+    return {
+      caseSensitive: Boolean(payload.caseSensitive),
+      wholeWord: Boolean(payload.wholeWord)
+    };
+  }
+
+  function replaceVisibleText(value, search, replacement, options = {}) {
+    const engine = getTextReplaceEngine();
+
+    if (!engine || typeof value !== 'string') {
+      return { value, count: 0, changedCount: 0 };
+    }
+
+    if (!/<[a-z!/][^>]*>/i.test(value)) {
+      return engine.replaceText(value, search, replacement, options);
+    }
+
+    const template = document.createElement('template');
+    template.innerHTML = value;
+    const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT);
+    let count = 0;
+    let changedCount = 0;
+    let node = walker.nextNode();
+
+    while (node) {
+      const result = engine.replaceText(node.nodeValue || '', search, replacement, options);
+
+      if (result.changedCount) {
+        node.nodeValue = result.value;
+      }
+
+      count += result.count;
+      changedCount += result.changedCount;
+
+      node = walker.nextNode();
+    }
+
+    return { value: changedCount ? template.innerHTML : value, count, changedCount };
+  }
+
+  function replaceVisibleTextOccurrence(value, search, replacement, occurrenceIndex, options = {}) {
+    const engine = getTextReplaceEngine();
+
+    if (!engine || typeof value !== 'string') {
+      return { value, count: 0, changedCount: 0 };
+    }
+
+    if (!/<[a-z!/][^>]*>/i.test(value)) {
+      const result = engine.replaceOccurrence(value, search, replacement, occurrenceIndex, options);
+      return {
+        ...result,
+        count: result.changedCount,
+        matched: result.count
+      };
+    }
+
+    const template = document.createElement('template');
+    template.innerHTML = value;
+    const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT);
+    let remainingIndex = occurrenceIndex;
+    let node = walker.nextNode();
+
+    while (node) {
+      const nodeValue = node.nodeValue || '';
+      const nodeCount = engine.countMatches(nodeValue, search, options);
+
+      if (remainingIndex < nodeCount) {
+        const result = engine.replaceOccurrence(nodeValue, search, replacement, remainingIndex, options);
+
+        if (result.count) {
+          if (result.changedCount) {
+            node.nodeValue = result.value;
+          }
+          return {
+            value: result.changedCount ? template.innerHTML : value,
+            count: result.changedCount,
+            matched: 1,
+            changedCount: result.changedCount
+          };
+        }
+      }
+
+      remainingIndex -= nodeCount;
+      node = walker.nextNode();
+    }
+
+    return { value, count: 0, matched: 0, changedCount: 0 };
+  }
+
+  function walkTextLeafValues(value, visitor, path = []) {
+    if (typeof value === 'string') {
+      visitor(value, path);
+      return;
+    }
+
+    if (Array.isArray(value)) {
+      value.forEach((item, index) => walkTextLeafValues(item, visitor, [...path, index]));
+      return;
+    }
+
+    if (value && typeof value === 'object') {
+      Object.keys(value).forEach((key) => walkTextLeafValues(value[key], visitor, [...path, key]));
+    }
+  }
+
+  function transformSelectedTextLeaves(value, selectedPaths, search, replacement, options, path = []) {
+    if (typeof value === 'string') {
+      if (!selectedPaths.has(JSON.stringify(path))) {
+        return { value, count: 0 };
+      }
+
+      return replaceVisibleText(value, search, replacement, options);
+    }
+
+    if (Array.isArray(value)) {
+      let count = 0;
+      const nextValue = value.map((item, index) => {
+        const result = transformSelectedTextLeaves(item, selectedPaths, search, replacement, options, [...path, index]);
+        count += result.changedCount ?? result.count;
+        return result.value;
+      });
+      return { value: count ? nextValue : value, count };
+    }
+
+    if (value && typeof value === 'object') {
+      let count = 0;
+      const nextValue = { ...value };
+
+      Object.keys(value).forEach((key) => {
+        const result = transformSelectedTextLeaves(value[key], selectedPaths, search, replacement, options, [...path, key]);
+        count += result.changedCount ?? result.count;
+        nextValue[key] = result.value;
+      });
+      return { value: count ? nextValue : value, count };
+    }
+
+    return { value, count: 0 };
+  }
+
+  function textMatchPreviews(value, search, options) {
+    let segments = [value];
+
+    if (/<[a-z!/][^>]*>/i.test(value)) {
+      const template = document.createElement('template');
+      template.innerHTML = value;
+      const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT);
+      segments = [];
+      let node = walker.nextNode();
+
+      while (node) {
+        segments.push(node.nodeValue || '');
+        node = walker.nextNode();
+      }
+    }
+
+    return segments.flatMap((segment) => {
+      const matcher = getTextReplaceEngine()?.createMatcher(search, options);
+      const previews = [];
+      let match = matcher?.exec(segment);
+
+      while (match) {
+        const start = Math.max(0, match.index - 45);
+        const end = Math.min(segment.length, match.index + match[0].length + 75);
+        const preview = segment.slice(start, end).replace(/\s+/g, ' ');
+        previews.push((start ? '…' : '') + preview + (end < segment.length ? '…' : ''));
+        match = matcher.exec(segment);
+      }
+
+      return previews;
+    });
+  }
+
+  function scanTextReplacements(payload = {}) {
+    if (!window.wp?.data || !getTextReplaceEngine()) {
+      return { ok: false, message: 'Open this on a WordPress block editor page first.', candidates: [] };
+    }
+
+    const search = typeof payload.search === 'string' ? payload.search : '';
+
+    if (!search.length) {
+      return { ok: false, message: 'Enter text to find first.', candidates: [] };
+    }
+
+    const options = textSearchOptions(payload);
+    const candidates = [];
+    const editorSelect = window.wp.data.select('core/editor');
+
+    ['title', 'excerpt'].forEach((field) => {
+      const value = editorSelect?.getEditedPostAttribute?.(field);
+
+      if (typeof value !== 'string') {
+        return;
+      }
+
+      const result = replaceVisibleText(value, search, search, options);
+
+      if (result.count) {
+        const previews = textMatchPreviews(value, search, options);
+        candidates.push({
+          target: 'post',
+          field,
+          label: field === 'title' ? 'Page/post title' : 'Excerpt',
+          count: result.count,
+          preview: previews[0],
+          previews
+        });
+      }
+    });
+
+    const blocks = collectBlocks(getEditorBlocks(), () => true);
+    blocks.forEach((block, blockIndex) => {
+      const attributes = block.attributes || {};
+
+      richTextAttributeKeys.forEach((attribute) => {
+        if (!(attribute in attributes)) {
+          return;
+        }
+
+        walkTextLeafValues(attributes[attribute], (value, path) => {
+          const result = replaceVisibleText(value, search, search, options);
+
+          if (!result.count) {
+            return;
+          }
+
+          const previews = textMatchPreviews(value, search, options);
+
+          candidates.push({
+            target: 'block',
+            clientId: block.clientId,
+            blockName: block.name,
+            attribute,
+            path,
+            label: `${block.name || 'Block'} ${blockIndex + 1}`,
+            count: result.count,
+            preview: previews[0],
+            previews
+          });
+        });
+      });
+    });
+
+    const matchCount = candidates.reduce((sum, candidate) => sum + candidate.count, 0);
+    return {
+      ok: true,
+      message: `Found ${matchCount} match${matchCount === 1 ? '' : 'es'} in ${candidates.length} editable item${candidates.length === 1 ? '' : 's'}.`,
+      candidates,
+      details: 'Preview only. No editor content was changed.'
+    };
+  }
+
+  function applyTextReplacements(payload = {}) {
+    if (!window.wp?.data || !getTextReplaceEngine()) {
+      return { ok: false, message: 'Open this on a WordPress block editor page first.' };
+    }
+
+    const search = typeof payload.search === 'string' ? payload.search : '';
+    const replacement = typeof payload.replacement === 'string' ? payload.replacement : '';
+    const targets = Array.isArray(payload.targets) ? payload.targets : [];
+
+    if (!search.length) {
+      return { ok: false, message: 'Enter text to find first.' };
+    }
+
+    if (!targets.length) {
+      return { ok: false, message: 'No text matches were selected for replacement.' };
+    }
+
+    const options = textSearchOptions(payload);
+    const postUpdates = {};
+    let replacementCount = 0;
+    let changedItems = 0;
+
+    targets.filter((target) => target.target === 'post').forEach((target) => {
+      if (!['title', 'excerpt'].includes(target.field)) {
+        return;
+      }
+
+      const currentValue = window.wp.data.select('core/editor')?.getEditedPostAttribute?.(target.field);
+      const result = replaceVisibleText(currentValue, search, replacement, options);
+
+      if (result.changedCount) {
+        postUpdates[target.field] = result.value;
+        replacementCount += result.changedCount;
+        changedItems += 1;
+      }
+    });
+
+    if (Object.keys(postUpdates).length) {
+      window.wp.data.dispatch('core/editor').editPost(postUpdates);
+    }
+
+    const blockTargets = new Map();
+    targets.filter((target) => target.target === 'block' && target.clientId && target.attribute).forEach((target) => {
+      const key = `${target.clientId}\n${target.attribute}`;
+
+      if (!blockTargets.has(key)) {
+        blockTargets.set(key, { ...target, paths: new Set() });
+      }
+
+      blockTargets.get(key).paths.add(JSON.stringify(Array.isArray(target.path) ? target.path : []));
+    });
+
+    const blocksById = new Map(collectBlocks(getEditorBlocks(), () => true).map((block) => [block.clientId, block]));
+    blockTargets.forEach((target) => {
+      const block = blocksById.get(target.clientId);
+      const currentValue = block?.attributes?.[target.attribute];
+      const result = transformSelectedTextLeaves(currentValue, target.paths, search, replacement, options);
+
+      if (!result.count) {
+        return;
+      }
+
+      window.wp.data.dispatch('core/block-editor').updateBlockAttributes(target.clientId, {
+        [target.attribute]: result.value
+      });
+      replacementCount += result.count;
+      changedItems += target.paths.size;
+    });
+
+    return {
+      ok: true,
+      message: `Replaced ${replacementCount} match${replacementCount === 1 ? '' : 'es'} in ${changedItems} editable item${changedItems === 1 ? '' : 's'}. Post was not saved.`,
+      details: replacementCount
+        ? 'Review the changes in WordPress, then save or update when ready.'
+        : 'No matching text remained in the checked items. Nothing was changed or saved.'
+    };
+  }
+
+  function applySingleTextReplacement(payload = {}) {
+    if (!window.wp?.data || !getTextReplaceEngine()) {
+      return { ok: false, message: 'Open this on a WordPress block editor page first.' };
+    }
+
+    const search = typeof payload.search === 'string' ? payload.search : '';
+    const replacement = typeof payload.replacement === 'string' ? payload.replacement : '';
+    const target = payload.target;
+    const occurrenceIndex = Number.parseInt(payload.occurrenceIndex, 10);
+
+    if (!search.length || !target || !Number.isInteger(occurrenceIndex) || occurrenceIndex < 0) {
+      return { ok: false, message: 'Find a current match before replacing it.' };
+    }
+
+    const options = textSearchOptions(payload);
+    let result = { count: 0 };
+
+    if (target.target === 'post' && ['title', 'excerpt'].includes(target.field)) {
+      const currentValue = window.wp.data.select('core/editor')?.getEditedPostAttribute?.(target.field);
+      result = replaceVisibleTextOccurrence(currentValue, search, replacement, occurrenceIndex, options);
+
+      if (result.count) {
+        window.wp.data.dispatch('core/editor').editPost({ [target.field]: result.value });
+      }
+    } else if (target.target === 'block' && target.clientId && target.attribute) {
+      const block = collectBlocks(getEditorBlocks(), () => true).find((item) => item.clientId === target.clientId);
+      const selectedPath = JSON.stringify(Array.isArray(target.path) ? target.path : []);
+
+      function replaceAtPath(value, path = []) {
+        if (typeof value === 'string') {
+          return JSON.stringify(path) === selectedPath
+            ? replaceVisibleTextOccurrence(value, search, replacement, occurrenceIndex, options)
+            : { value, count: 0 };
+        }
+
+        if (Array.isArray(value)) {
+          const nextValue = [...value];
+
+          for (let index = 0; index < value.length; index += 1) {
+            const child = replaceAtPath(value[index], [...path, index]);
+
+            if (child.count) {
+              nextValue[index] = child.value;
+              return { value: nextValue, count: child.count };
+            }
+          }
+        } else if (value && typeof value === 'object') {
+          const nextValue = { ...value };
+
+          for (const key of Object.keys(value)) {
+            const child = replaceAtPath(value[key], [...path, key]);
+
+            if (child.count) {
+              nextValue[key] = child.value;
+              return { value: nextValue, count: child.count };
+            }
+          }
+        }
+
+        return { value, count: 0 };
+      }
+
+      result = replaceAtPath(block?.attributes?.[target.attribute]);
+
+      if (result.count) {
+        window.wp.data.dispatch('core/block-editor').updateBlockAttributes(target.clientId, {
+          [target.attribute]: result.value
+        });
+      }
+    }
+
+    return {
+      ok: true,
+      message: result.count ? 'Replaced the current match. Post was not saved.' : 'The current match changed or no longer exists. Find again.',
+      replaced: result.count,
+      details: result.count ? 'Review the change in WordPress, then save or update when ready.' : 'Nothing was changed or saved.'
+    };
+  }
+
+  const textReplacementHighlightName = 'wsu-wds-find-match';
+  const textReplacementHighlightStyleId = 'wsu-wds-find-highlight-style';
+
+  function ensureTextReplacementHighlightStyle() {
+    if (document.getElementById(textReplacementHighlightStyleId)) {
+      return;
+    }
+
+    const style = document.createElement('style');
+    style.id = textReplacementHighlightStyleId;
+    style.textContent = `
+      ::highlight(${textReplacementHighlightName}) {
+        color: #111827;
+        background-color: #ffeb3b;
+      }
+      .wsu-wds-find-input-selection::selection {
+        color: #111827;
+        background-color: #ffeb3b;
+      }
+    `;
+    (document.head || document.documentElement).appendChild(style);
+  }
+
+  function clearTextReplacementHighlight() {
+    window.CSS?.highlights?.delete?.(textReplacementHighlightName);
+
+    if (window.__WSU_WDS_FIND_INPUT__) {
+      const input = window.__WSU_WDS_FIND_INPUT__;
+      const caret = input.selectionEnd || 0;
+      input.setSelectionRange?.(caret, caret);
+      input.classList?.remove('wsu-wds-find-input-selection');
+      window.__WSU_WDS_FIND_INPUT__ = null;
+    }
+
+    if (window.__WSU_WDS_FIND_USED_SELECTION__) {
+      window.getSelection?.()?.removeAllRanges();
+      window.__WSU_WDS_FIND_USED_SELECTION__ = false;
+    }
+
+    return { ok: true, message: 'Cleared the current text highlight.' };
+  }
+
+  function highlightTextNodeOccurrence(scope, search, occurrenceIndex, options) {
+    if (!scope || !search.length || !Number.isInteger(occurrenceIndex) || occurrenceIndex < 0) {
+      return false;
+    }
+
+    const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
+    let remainingIndex = occurrenceIndex;
+    let node = walker.nextNode();
+
+    while (node) {
+      const matcher = getTextReplaceEngine()?.createMatcher(search, options);
+      let match = matcher?.exec(node.nodeValue || '');
+
+      while (match) {
+        if (remainingIndex === 0) {
+          const range = document.createRange();
+          range.setStart(node, match.index);
+          range.setEnd(node, match.index + match[0].length);
+
+          if (window.CSS?.highlights && typeof window.Highlight === 'function') {
+            window.CSS.highlights.set(textReplacementHighlightName, new window.Highlight(range));
+          } else {
+            const selection = window.getSelection?.();
+            selection?.removeAllRanges();
+            selection?.addRange(range);
+            window.__WSU_WDS_FIND_USED_SELECTION__ = true;
+          }
+
+          node.parentElement?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+          return true;
+        }
+
+        remainingIndex -= 1;
+        match = matcher.exec(node.nodeValue || '');
+      }
+
+      node = walker.nextNode();
+    }
+
+    return false;
+  }
+
+  function highlightInputOccurrence(input, search, occurrenceIndex, options) {
+    if (!input || typeof input.setSelectionRange !== 'function') {
+      return false;
+    }
+
+    const matcher = getTextReplaceEngine()?.createMatcher(search, options);
+    let remainingIndex = occurrenceIndex;
+    let match = matcher?.exec(input.value || '');
+
+    while (match) {
+      if (remainingIndex === 0) {
+        input.classList.add('wsu-wds-find-input-selection');
+        window.__WSU_WDS_FIND_INPUT__ = input;
+        input.focus();
+        input.setSelectionRange(match.index, match.index + match[0].length);
+        input.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+        return true;
+      }
+
+      remainingIndex -= 1;
+      match = matcher.exec(input.value || '');
+    }
+
+    return false;
+  }
+
+  function focusTextReplacementCandidate(payload = {}) {
+    const target = payload.target;
+
+    if (!target) {
+      return { ok: false, message: 'No current text match to focus.' };
+    }
+
+    clearTextReplacementHighlight();
+    ensureTextReplacementHighlightStyle();
+    const search = typeof payload.search === 'string' ? payload.search : '';
+    const occurrenceIndex = Number.parseInt(payload.renderedOccurrenceIndex, 10) || 0;
+    const options = textSearchOptions(payload);
+    let highlighted = false;
+
+    if (target.target === 'block' && target.clientId) {
+      window.wp?.data?.dispatch('core/block-editor')?.selectBlock?.(target.clientId);
+      const escapedClientId = window.CSS?.escape ? window.CSS.escape(target.clientId) : target.clientId;
+      const blockElement = document.querySelector(`[data-block="${escapedClientId}"]`);
+      blockElement?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+      highlighted = highlightTextNodeOccurrence(blockElement, search, occurrenceIndex, options);
+    } else if (target.target === 'post' && target.field === 'title') {
+      const titleElement = document.querySelector('.editor-post-title__input, .editor-post-title, [data-type="core/post-title"], [aria-label="Add title"]');
+      highlighted = highlightInputOccurrence(titleElement, search, occurrenceIndex, options)
+        || highlightTextNodeOccurrence(titleElement, search, occurrenceIndex, options);
+    } else if (target.target === 'post' && target.field === 'excerpt') {
+      const excerptElement = document.querySelector('.editor-post-excerpt__textarea, textarea[name="excerpt"], [data-wp-component="PostExcerpt"] textarea');
+      highlighted = highlightInputOccurrence(excerptElement, search, occurrenceIndex, options)
+        || highlightTextNodeOccurrence(excerptElement, search, occurrenceIndex, options);
+    }
+
+    return {
+      ok: true,
+      highlighted,
+      message: highlighted ? 'Highlighted the current text match.' : 'Focused the current block; an exact rendered-text highlight was unavailable.'
+    };
+  }
+
   function walkRichTextValue(value, visitor, attribute) {
     if (typeof value === 'string') {
       if (value.includes('<a')) {
@@ -999,6 +1559,59 @@
       ok: true,
       message: `Updated ${changes.length} link text item${changes.length === 1 ? '' : 's'}.`,
       details: changes.length ? changes.join('\n') : `Changed ${changedBlocks} block${changedBlocks === 1 ? '' : 's'}.`
+    };
+  }
+
+  function replaceEmailLinkTextInHtml(html) {
+    const helper = window.WSU_WDS_EMAIL_LINK;
+    const template = document.createElement('template');
+    template.innerHTML = html;
+    const changes = [];
+
+    if (!helper?.replacementForLink) {
+      return { html, changes };
+    }
+
+    Array.from(template.content.querySelectorAll('a[href^="mailto:" i]')).forEach((anchor) => {
+      const replacement = helper.replacementForLink(anchor.textContent, anchor.getAttribute('href'));
+
+      if (!replacement) {
+        return;
+      }
+
+      const oldText = (anchor.textContent || '').replace(/\s+/g, ' ').trim();
+      anchor.textContent = replacement.text;
+      anchor.removeAttribute('aria-label');
+      anchor.removeAttribute('aria-labelledby');
+      changes.push(`${oldText} -> ${replacement.text}`);
+    });
+
+    return { html: template.innerHTML, changes };
+  }
+
+  function fixEmailLinkText() {
+    if (!window.wp?.data) {
+      return { ok: false, message: 'Open this on a WordPress block editor page first.' };
+    }
+
+    const blocks = collectBlocks(getEditorBlocks(), () => true);
+    const changes = [];
+
+    blocks.forEach((block) => {
+      const result = transformRichTextAttributes(block, replaceEmailLinkTextInHtml);
+
+      if (Object.keys(result.updates).length) {
+        window.wp.data.dispatch('core/block-editor').updateBlockAttributes(block.clientId, result.updates);
+        changes.push(...result.changes);
+      }
+    });
+
+    return {
+      ok: true,
+      message: changes.length
+        ? `Updated ${changes.length} email link${changes.length === 1 ? '' : 's'}. Post was not saved.`
+        : 'No email links with exposed addresses, recipient-only text, or generic text were found.',
+      details: changes.length ? changes.join('\n') : 'The label is derived from the mailbox name before the @ symbol; meaningful custom link text is left unchanged.'
     };
   }
 
@@ -1853,6 +2466,7 @@
       /linked image missing alt text/ig,
       /links?\s+(?:is|are)?\s*set\s+to\s+open\s+in\s+a\s+new\s+tab/ig,
       /links? with generic text/ig,
+      /(?:email links? with (?:generic text|email addresses? as (?:the )?link text)|email addresses? used as link text)/ig,
       /incorrect heading order/ig,
       /links? with urldefense\.com in the URL/ig,
       /(?:link text containing the URL protocol|links? containing the URL protocol|URL protocol[^.]*link text)/ig,
@@ -2041,6 +2655,11 @@
   const actions = {
     analyzeTaxonomySuggestions,
     applyTaxonomySuggestions,
+    scanTextReplacements,
+    applyTextReplacements,
+    applySingleTextReplacement,
+    focusTextReplacementCandidate,
+    clearTextReplacementHighlight,
     makeAllHeadingsH2,
     applyH2FontSize,
     changeHeadingLevel,
@@ -2050,6 +2669,7 @@
     inspectSelectedBlock,
     scanLinkTextForTitles,
     applyLinkTextTitles,
+    fixEmailLinkText,
     unwrapUrlDefenseLinks,
     unboldLongAllBoldParagraphs,
     removeNewTabFromLinks,

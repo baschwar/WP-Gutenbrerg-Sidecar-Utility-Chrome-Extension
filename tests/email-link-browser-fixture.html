@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Email link bridge fixture</title>
+</head>
+<body>
+  <button id="run" type="button">Run email link fixer</button>
+  <p id="rendered"></p>
+  <pre id="result">Not run</pre>
+  <pre id="counts">updates=0 saves=0</pre>
+  <script>
+    const blocks = [{
+      clientId: 'paragraph-1',
+      name: 'core/paragraph',
+      attributes: {
+        content: '<strong>Vancouver MN/DNP students:</strong> <a href="mailto:kathleen.finch@wsu.edu?subject=Vancouver%20MN%2FDNP" aria-label="Kathleen Finch email address">kathleen.finch@wsu.edu</a>. Department: <a href="mailto:development@wsu.edu">development@wsu.edu</a>. Custom: <a href="mailto:kathleen.finch@wsu.edu">Schedule an advising appointment</a>.'
+      },
+      innerBlocks: []
+    }];
+    const calls = { updates: 0, saves: 0 };
+
+    function render() {
+      document.querySelector('#rendered').innerHTML = blocks[0].attributes.content;
+      document.querySelector('#counts').textContent = `updates=${calls.updates} saves=${calls.saves}`;
+    }
+
+    window.wp = {
+      data: {
+        select(store) {
+          if (store === 'core/block-editor') {
+            return { getBlocks: () => blocks };
+          }
+
+          if (store === 'core/editor') {
+            return { getEditedPostAttribute: () => '' };
+          }
+
+          return {};
+        },
+        dispatch(store) {
+          if (store === 'core/block-editor') {
+            return {
+              updateBlockAttributes(clientId, updates) {
+                const block = blocks.find((item) => item.clientId === clientId);
+                Object.assign(block.attributes, updates);
+                calls.updates += 1;
+                render();
+              }
+            };
+          }
+
+          if (store === 'core/editor') {
+            return { savePost: () => { calls.saves += 1; } };
+          }
+
+          return {};
+        }
+      }
+    };
+
+    window.addEventListener('message', (event) => {
+      if (event.source === window && event.data?.source === 'WSU_WDS_PAGE') {
+        document.querySelector('#result').textContent = JSON.stringify(event.data.response, null, 2);
+      }
+    });
+
+    document.querySelector('#run').addEventListener('click', () => {
+      window.postMessage({
+        source: 'WSU_WDS_CONTENT',
+        id: 'email-fixture',
+        action: 'fixEmailLinkText',
+        payload: {}
+      }, '*');
+    });
+
+    render();
+  </script>
+  <script src="../wp-bulk-editor-extension/email-link.js"></script>
+  <script src="../wp-bulk-editor-extension/page-bridge.js"></script>
+</body>
+</html>

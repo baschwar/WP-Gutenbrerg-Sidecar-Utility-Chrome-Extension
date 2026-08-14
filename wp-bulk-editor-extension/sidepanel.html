@@ -160,6 +160,10 @@
             <h3 class="tooltip-heading"><span>Generic Link Text</span><button class="tooltip-trigger" type="button" aria-label="Find generic link text like here, click here, and read more, then replace it with the linked page title.">?</button><span class="tooltip-text" role="tooltip">Find generic link text like here, click here, and read more, then replace it with the linked page title.</span></h3>
             <button id="fix-generic-link-text" type="button">Run</button>
           </div>
+          <div class="utility-card compact-card" data-fixes="email-link-text">
+            <h3 class="tooltip-heading"><span>Email Link Text</span><button class="tooltip-trigger" type="button" aria-label="Replace a linked email address or generic email label with action-and-recipient text such as Email Kathleen Finch or Email Development. The mailto address is preserved.">?</button><span class="tooltip-text" role="tooltip">Use the mailbox name to create text such as “Email Kathleen Finch” or “Email Development.” The mailto address is preserved.</span></h3>
+            <button id="fix-email-link-text" type="button">Run</button>
+          </div>
           <div class="utility-card compact-card" data-fixes="urldefense-link safelinks-link">
             <h3 class="tooltip-heading"><span>Tracked Links</span><button class="tooltip-trigger" type="button" aria-label="Replace URLDefense and Outlook Safe Links wrapper URLs with the decoded original destination URL.">?</button><span class="tooltip-text" role="tooltip">Replace URLDefense and Outlook Safe Links wrapper URLs with the decoded original destination URL.</span></h3>
             <button id="fix-urldefense-links" type="button">Run</button>
@@ -173,6 +177,26 @@
 
       <section class="panel">
         <h2>Text Cleanup</h2>
+        <div class="utility-card" data-fixes="text-search text-replace">
+          <h3 class="tooltip-heading"><span>Search &amp; Replace</span><button class="tooltip-trigger" type="button" aria-label="Find literal text in the title, excerpt, and Gutenberg blocks, then replace the current match or all matches. Inline formatting and links are preserved. Nothing is saved.">?</button><span class="tooltip-text" role="tooltip">Find literal text in the title, excerpt, and Gutenberg blocks, then replace the current match or all matches. Inline formatting and links are preserved. Nothing is saved.</span></h3>
+          <div class="text-replace-fields">
+            <label for="text-search">Find</label>
+            <input id="text-search" type="text" autocomplete="off">
+            <label for="text-replacement">Replace with</label>
+            <input id="text-replacement" type="text" autocomplete="off">
+          </div>
+          <div class="text-replace-options">
+            <label class="compact-check"><input id="text-search-case-sensitive" type="checkbox"> Match case</label>
+            <label class="compact-check"><input id="text-search-whole-word" type="checkbox"> Whole word</label>
+          </div>
+          <div class="button-row text-replace-actions">
+            <button id="find-text" type="button">Find</button>
+            <button id="find-next-text" class="secondary" type="button" disabled>Find next</button>
+            <button id="replace-current-text" type="button" disabled>Replace</button>
+            <button id="replace-all-text" type="button">Replace all</button>
+          </div>
+          <div id="text-replacement-current" class="suggestion-item text-replacement-current" hidden></div>
+        </div>
         <div class="utility-card" data-fixes="bold-paragraph">
           <h3 class="tooltip-heading"><span>Bold Paragraph Fixes</span><button class="tooltip-trigger" type="button" aria-label="Fix paragraphs that are entirely bold, including converting short bold lines into H2 headings when appropriate.">?</button><span class="tooltip-text" role="tooltip">Fix paragraphs that are entirely bold, including converting short bold lines into H2 headings when appropriate.</span></h3>
           <div class="rule-row">

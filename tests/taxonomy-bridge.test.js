@@ -6,6 +6,7 @@ const vm = require('node:vm');
 
 const classifier = require('../wp-bulk-editor-extension/taxonomy-classifier.js');
 const config = require('../wp-bulk-editor-extension/taxonomy-rules.js');
+const textReplace = require('../wp-bulk-editor-extension/text-replace.js');
 
 function makeOption(value, name, selected = false) {
   return { value: String(value), textContent: name, selected };
@@ -23,7 +24,7 @@ function makeSelect(taxonomy, options, calls) {
 }
 
 function makeBridgeFixture(options = {}) {
-  const calls = { editPost: [], events: [], savePost: 0 };
+  const calls = { blockUpdates: [], editPost: [], events: [], savePost: 0 };
   const selects = [
     makeSelect('category', [
       makeOption(4, 'Research', Boolean(options.researchSelected)),
@@ -73,15 +74,15 @@ function makeBridgeFixture(options = {}) {
     getCurrentPostType: () => options.postType || 'post',
     getEditedPostAttribute: (name) => editedAttributes[name]
   };
-  const blockSelectors = {
-    getBlocks: () => [
-      {
-        name: 'core/paragraph',
-        attributes: { content: options.body || 'The Rural Nursing Pathway supports workforce development.' },
-        innerBlocks: []
-      }
-    ]
-  };
+  const blocks = [
+    {
+      clientId: 'paragraph-1',
+      name: 'core/paragraph',
+      attributes: { content: options.body || 'The Rural Nursing Pathway supports workforce development.' },
+      innerBlocks: []
+    }
+  ];
+  const blockSelectors = { getBlocks: () => blocks };
   const redirectFields = options.redirectUrl ? [{
     id: 'redirect_to',
     name: 'redirect_to',
@@ -123,7 +124,8 @@ function makeBridgeFixture(options = {}) {
     setTimeout,
     clearTimeout,
     WSU_WDS_TAXONOMY_CLASSIFIER: classifier,
-    WSU_WDS_TAXONOMY_CONFIG: config
+    WSU_WDS_TAXONOMY_CONFIG: config,
+    WSU_WDS_TEXT_REPLACE: textReplace
   };
 
   context.window = context;
@@ -136,9 +138,22 @@ function makeBridgeFixture(options = {}) {
       dispatch: (store) => {
         if (store === 'core/editor') {
           return {
-            editPost: (updates) => calls.editPost.push(updates),
+            editPost: (updates) => {
+              Object.assign(editedAttributes, updates);
+              calls.editPost.push(updates);
+            },
             savePost: () => {
               calls.savePost += 1;
+            }
+          };
+        }
+
+        if (store === 'core/block-editor') {
+          return {
+            updateBlockAttributes: (clientId, updates) => {
+              const block = blocks.find((item) => item.clientId === clientId);
+              Object.assign(block.attributes, updates);
+              calls.blockUpdates.push({ clientId, updates });
             }
           };
         }
@@ -167,6 +182,7 @@ function makeBridgeFixture(options = {}) {
 
   return {
     calls,
+    blocks,
     selects,
     selected(taxonomy) {
       const select = selects.find((item) => item.name.includes(`[${taxonomy}]`));
@@ -301,4 +317,55 @@ test('bridge abstains when the visible Redirect Post field contains a destinatio
   assert.deepEqual(JSON.parse(JSON.stringify(analysis.suggestions)), []);
   assert.match(analysis.message, /redirect post/);
   assert.equal(fixture.calls.savePost, 0);
+});
+
+test('text find reports title, excerpt, and block matches without changing or saving content', async () => {
+  const fixture = makeBridgeFixture({
+    title: 'Nursing update',
+    excerpt: 'A nursing summary',
+    body: 'Nursing students study nursing practice.'
+  });
+  const scan = await fixture.send('scanTextReplacements', { search: 'nursing' });
+
+  assert.equal(scan.ok, true);
+  assert.equal(scan.candidates.reduce((sum, item) => sum + item.count, 0), 4);
+  assert.deepEqual(JSON.parse(JSON.stringify(scan.candidates.map((item) => item.target))), ['post', 'post', 'block']);
+  assert.equal(fixture.calls.editPost.length, 0);
+  assert.equal(fixture.calls.blockUpdates.length, 0);
+  assert.equal(fixture.calls.savePost, 0);
+});
+
+test('Replace changes only the selected occurrence in one block and does not save', async () => {
+  const fixture = makeBridgeFixture({ title: 'Unrelated', excerpt: '', body: 'Test test TEST' });
+  const scan = await fixture.send('scanTextReplacements', { search: 'test' });
+  const target = scan.candidates.find((item) => item.target === 'block');
+  const applied = await fixture.send('applySingleTextReplacement', {
+    search: 'test',
+    replacement: 'done',
+    target,
+    occurrenceIndex: 1
+  });
+
+  assert.equal(applied.ok, true);
+  assert.equal(applied.replaced, 1);
+  assert.equal(fixture.blocks[0].attributes.content, 'Test done TEST');
+  assert.equal(fixture.calls.blockUpdates.length, 1);
+  assert.equal(fixture.calls.savePost, 0);
+});
+
+test('Replace all updates every matching title and block item without saving', async () => {
+  const fixture = makeBridgeFixture({ title: 'Old title', excerpt: '', body: 'Old text and old text.' });
+  const scan = await fixture.send('scanTextReplacements', { search: 'old' });
+  const applied = await fixture.send('applyTextReplacements', {
+    search: 'old',
+    replacement: 'New',
+    targets: scan.candidates
+  });
+
+  assert.equal(applied.ok, true);
+  assert.match(applied.message, /3 matches/);
+  assert.equal(fixture.calls.editPost.at(-1).title, 'New title');
+  assert.equal(fixture.blocks[0].attributes.content, 'New text and New text.');
+  assert.equal(fixture.calls.savePost, 0);
+  assert.match(applied.message, /Post was not saved/);
 });
